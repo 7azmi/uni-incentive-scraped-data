@@ -87,6 +87,7 @@ try:
         print(f"⚠️ No URLs found in input file '{INPUT_FILENAME}'.")
         exit(0)
     print(f"📄 Loaded {len(urls)} URLs from '{INPUT_FILENAME}'.")
+    total_urls_loaded = len(urls) # Keep track of the total loaded
 except FileNotFoundError:
     print(f"❌ ERROR: Input file '{INPUT_FILENAME}' not found in the script directory.")
     print(f"Make sure '{INPUT_FILENAME}' is in the same directory as the script.")
@@ -104,10 +105,22 @@ else:
      print(f"📁 Main output directory already exists: {MAIN_OUTPUT_DIRECTORY}")
 
 
-# --- Scrape Each URL and Save Markdown ---
-print("\nStarting scraping process...")
+# --- Initialize Stats Counters ---
+skipped_pdf_count = 0
+skipped_exists_count = 0
+error_count = 0
+successfully_scraped_count = 0
+
+# --- Process Each URL ---
+print("\nStarting processing...")
 for idx, url in enumerate(urls, start=1):
-    print(f"\n[{idx}/{len(urls)}] Scraping: {url}")
+    print(f"\n[{idx}/{total_urls_loaded}] Processing: {url}")
+
+    # --- REQUIREMENT 1: Ignore PDF URLs ---
+    if url.lower().endswith('.pdf'):
+        print(f"   ➡️ Skipping URL ending in .pdf: {url}")
+        skipped_pdf_count += 1 # Increment PDF skip counter
+        continue # Skip to the next URL in the loop
 
     try:
         # --- Extract Registrable Domain using tldextract ---
@@ -115,14 +128,14 @@ for idx, url in enumerate(urls, start=1):
 
         # Check if tldextract successfully found domain and suffix
         if not extracted.domain or not extracted.suffix:
-             print(f"⚠️ Could not extract registrable domain from URL: {url}. Skipping.")
+             print(f"   ⚠️ Could not extract registrable domain from URL: {url}. Skipping.")
+             error_count += 1 # Count this as an error in processing
              continue
 
         # Combine domain and suffix to get the folder name (e.g., 'taylors.edu.my', 'upm.edu.my')
         main_domain = f"{extracted.domain}.{extracted.suffix}"
 
         # Sanitize domain name for folder name (replace potential problematic characters if any)
-        # This is less critical for domains than paths, but being safe is easy.
         main_domain = main_domain.replace(':', '_').replace('/', '_') # Simple domain sanitization
 
 
@@ -136,7 +149,8 @@ for idx, url in enumerate(urls, start=1):
                 print(f"   Created domain directory: {DOMAIN_OUTPUT_DIRECTORY}")
             except Exception as e:
                 print(f"   ❌ ERROR: Could not create domain directory '{DOMAIN_OUTPUT_DIRECTORY}'. Skipping URL. {e}")
-                continue # Skip scraping this URL if directory creation failed
+                error_count += 1 # Count this as an error
+                continue # Skip processing this URL if directory creation failed
 
         # --- Generate Filename from URL Path ---
         parsed_url = urlparse(url)
@@ -150,29 +164,49 @@ for idx, url in enumerate(urls, start=1):
             # Truncate and maybe add a hash to avoid collisions if needed
             # For simplicity, let's just truncate and add the index as a fallback identifier
             print(f"   ⚠️ Generated filename is too long ({len(output_filename)} chars), truncating.")
-            truncated_base = filename_base[:MAX_FILENAME_LEN - len('.md') - len(str(idx)) - 1] # Leave space for index and dot
+            # Keep the .md extension and leave space for index + underscore
+            truncated_base = filename_base[:MAX_FILENAME_LEN - len('.md') - len(str(idx)) - 1]
             output_filename = f"{truncated_base}_{idx}.md"
 
 
         output_path = os.path.join(DOMAIN_OUTPUT_DIRECTORY, output_filename)
 
+        # --- REQUIREMENT 2: Skip if output file already exists ---
+        if os.path.exists(output_path):
+            print(f"   ✅ Output file already exists: {output_path}. Skipping scraping.")
+            skipped_exists_count += 1 # Increment exists skip counter
+            continue # Skip the API call and file writing, move to next URL
 
-        # --- Scrape URL ---
+
+        # --- Only scrape if it's not a PDF and the file doesn't exist ---
+        print(f"   🌍 Crawling URL with Firecrawl: {url}") # Indicate when API call happens
         response = app.scrape_url(url, formats=["markdown"])
 
         # The response object directly has attributes like .markdown, .html, .data, etc.
         markdown_content = response.markdown
 
         if not markdown_content:
-            print(f"⚠️ No markdown content returned for: {url}")
+            print(f"   ⚠️ No markdown content returned for: {url}")
+            error_count += 1 # Count empty content as an error/failure
             continue
 
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(markdown_content)
-        print(f"✅ Saved: {output_path}")
+        print(f"   💾 Saved: {output_path}") # Changed print for clarity
+        successfully_scraped_count += 1 # Increment success counter
 
     except Exception as e:
-        print(f"❌ ERROR scraping {url}: {e}")
+        print(f"   ❌ ERROR processing {url}: {e}") # Changed 'scraping' to 'processing'
+        error_count += 1 # Increment error counter
 
-print("\n🎉 Scraping process completed.")
+# --- Print Run Statistics ---
+print("\n--- 📊 Run Statistics ---")
+print(f"🔗 Total URLs Loaded: {total_urls_loaded}")
+print(f"➡️ Skipped (PDF): {skipped_pdf_count}")
+print(f"⏭️ Skipped (Already Exists): {skipped_exists_count}")
+print(f"✅ Successfully Scraped & Saved: {successfully_scraped_count}")
+print(f"❌ Errors (Processing/Scraping Failed): {error_count}")
+print("-------------------------\n")
+
+print("🎉 Processing completed.")
